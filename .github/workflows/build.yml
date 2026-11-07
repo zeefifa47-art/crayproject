@@ -1,12 +1,8 @@
-name: Build CRAY APK
-
+name: Build CRAY
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
@@ -17,24 +13,26 @@ jobs:
       KS_B64: ${{ secrets.KEYSTORE_B64 }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
-
+          java-version: 17
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: "8.9"
+
+      - name: Ekstrak zip
+        run: |
+          mkdir -p proj
+          unzip -q -o CRAY-project.zip -d proj
 
       - name: Restore keystore
-        id: ks
         uses: actions/cache@v4
         with:
           path: cray.jks
           key: cray-keystore-v1
 
-      - name: Prepare keystore
+      - name: Siapkan keystore
         run: |
           if [ -n "$KS_B64" ]; then
             echo "$KS_B64" | base64 -d > cray.jks
@@ -44,30 +42,59 @@ jobs:
               -dname "CN=CRAY, O=inihazi, C=ID"
           fi
 
-      - name: Bind QR to signing key
+      - name: Ikat QR donasi ke tanda tangan
         run: |
-          pip install cryptography -q
+          pip install -q cryptography --break-system-packages || pip install -q cryptography
           keytool -exportcert -keystore cray.jks -alias cray -storepass "$KS_PASS" -file cert.der
-          python3 tools/bind_qr.py cert.der secret/qris.jpg app/src/main/assets/q.bin
+          python3 proj/tools/bind_qr.py cert.der proj/secret/qris.jpg proj/app/src/main/assets/q.bin
+          ls -la proj/app/src/main/assets
 
-      - name: Build release APK
+      - name: Build APK dan AAB
+        working-directory: proj
         env:
           KS_FILE: ${{ github.workspace }}/cray.jks
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: gradle :app:assembleRelease :app:bundleRelease --no-daemon --stacktrace
 
-      - name: Collect APK
+      - name: Siapkan hasil
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/release/CRAY-release.apk out/CRAY.apk
+          cp proj/app/build/outputs/apk/release/CRAY-release.apk out/CRAY.apk
+          AAB=$(find proj/app/build/outputs/bundle/release -name '*.aab' | head -1)
+          curl -sL -o bt.jar https://github.com/google/bundletool/releases/download/1.15.6/bundletool-all-1.15.6.jar
+          java -jar bt.jar build-apks \
+            --bundle="$AAB" \
+            --output=out/CRAY.apks --mode=default \
+            --ks=cray.jks --ks-pass=pass:"$KS_PASS" \
+            --ks-key-alias=cray --key-pass=pass:"$KS_PASS"
+          rm -rf x && mkdir x && unzip -q out/CRAY.apks -d x
+          python3 - <<'PY'
+          import glob, json, os, zipfile
+          files = sorted(glob.glob('x/splits/*.apk'))
+          def sid(f):
+              n = os.path.basename(f)[:-4]
+              return 'base' if n == 'base-master' else 'config.' + n.replace('base-', '')
+          m = {
+            "xapk_version": 2,
+            "package_name": "com.cray.hazi",
+            "name": "CRAY",
+            "version_code": "1",
+            "version_name": "1.0.0",
+            "min_sdk_version": "26",
+            "target_sdk_version": "35",
+            "permissions": [],
+            "split_apks": [{"file": os.path.basename(f), "id": sid(f)} for f in files],
+          }
+          with zipfile.ZipFile('out/CRAY.xapk', 'w', zipfile.ZIP_DEFLATED) as z:
+              z.writestr('manifest.json', json.dumps(m))
+              for f in files:
+                  z.write(f, os.path.basename(f))
+          PY
+          ls -la out
 
       - uses: actions/upload-artifact@v4
         with:
           name: CRAY
-          path: out/CRAY.apk
-
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: CRAY v1.0.${{ github.run_number }}
-          files: out/CRAY.apk
+          path: |
+            out/CRAY.apk
+            out/CRAY.apks
+            out/CRAY.xapk
