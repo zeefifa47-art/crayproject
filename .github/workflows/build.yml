@@ -1,0 +1,73 @@
+name: Build CRAY APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      KS_PASS: ${{ secrets.KS_PASS || 'cray-hazi-2026' }}
+      KS_ALIAS: cray
+      KS_B64: ${{ secrets.KEYSTORE_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Restore keystore
+        id: ks
+        uses: actions/cache@v4
+        with:
+          path: cray.jks
+          key: cray-keystore-v1
+
+      - name: Prepare keystore
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > cray.jks
+          elif [ ! -f cray.jks ]; then
+            keytool -genkeypair -keystore cray.jks -alias cray -keyalg RSA -keysize 2048 \
+              -validity 10000 -storepass "$KS_PASS" -keypass "$KS_PASS" \
+              -dname "CN=CRAY, O=inihazi, C=ID"
+          fi
+
+      - name: Bind QR to signing key
+        run: |
+          pip install cryptography -q
+          keytool -exportcert -keystore cray.jks -alias cray -storepass "$KS_PASS" -file cert.der
+          python3 tools/bind_qr.py cert.der secret/qris.jpg app/src/main/assets/q.bin
+
+      - name: Build release APK
+        env:
+          KS_FILE: ${{ github.workspace }}/cray.jks
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/CRAY-release.apk out/CRAY.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CRAY
+          path: out/CRAY.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: CRAY v1.0.${{ github.run_number }}
+          files: out/CRAY.apk
