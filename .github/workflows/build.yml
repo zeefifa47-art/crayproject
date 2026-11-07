@@ -1,4 +1,4 @@
-name: Build CRAY
+name: Build DRAX
 on:
   push:
     branches: [ main, master ]
@@ -24,7 +24,7 @@ jobs:
       - name: Ekstrak zip
         run: |
           mkdir -p proj
-          unzip -q -o CRAY-project.zip -d proj
+          unzip -q -o DRAX-project.zip -d proj
 
       - name: Restore keystore
         uses: actions/cache@v4
@@ -39,7 +39,7 @@ jobs:
           elif [ ! -f cray.jks ]; then
             keytool -genkeypair -keystore cray.jks -alias cray -keyalg RSA -keysize 2048 \
               -validity 10000 -storepass "$KS_PASS" -keypass "$KS_PASS" \
-              -dname "CN=CRAY, O=inihazi, C=ID"
+              -dname "CN=DRAX, O=inihazi, C=ID"
           fi
 
       - name: Ikat QR donasi ke tanda tangan
@@ -58,15 +58,15 @@ jobs:
       - name: Siapkan hasil
         run: |
           mkdir -p out
-          cp proj/app/build/outputs/apk/release/CRAY-release.apk out/CRAY.apk
+          cp proj/app/build/outputs/apk/release/DRAX-release.apk out/DRAX.apk
           AAB=$(find proj/app/build/outputs/bundle/release -name '*.aab' | head -1)
           curl -sL -o bt.jar https://github.com/google/bundletool/releases/download/1.15.6/bundletool-all-1.15.6.jar
           java -jar bt.jar build-apks \
             --bundle="$AAB" \
-            --output=out/CRAY.apks --mode=default \
+            --output=out/DRAX.apks --mode=default \
             --ks=cray.jks --ks-pass=pass:"$KS_PASS" \
             --ks-key-alias=cray --key-pass=pass:"$KS_PASS"
-          rm -rf x && mkdir x && unzip -q out/CRAY.apks -d x
+          rm -rf x && mkdir x && unzip -q out/DRAX.apks -d x
           python3 - <<'PY'
           import glob, json, os, zipfile
           files = sorted(glob.glob('x/splits/*.apk'))
@@ -76,7 +76,7 @@ jobs:
           m = {
             "xapk_version": 2,
             "package_name": "com.cray.hazi",
-            "name": "CRAY",
+            "name": "DRAX",
             "version_code": "1",
             "version_name": "1.0.0",
             "min_sdk_version": "26",
@@ -84,7 +84,7 @@ jobs:
             "permissions": [],
             "split_apks": [{"file": os.path.basename(f), "id": sid(f)} for f in files],
           }
-          with zipfile.ZipFile('out/CRAY.xapk', 'w', zipfile.ZIP_DEFLATED) as z:
+          with zipfile.ZipFile('out/DRAX.xapk', 'w', zipfile.ZIP_DEFLATED) as z:
               z.writestr('manifest.json', json.dumps(m))
               for f in files:
                   z.write(f, os.path.basename(f))
@@ -93,8 +93,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: CRAY
+          name: DRAX
           path: |
-            out/CRAY.apk
-            out/CRAY.apks
-            out/CRAY.xapk
+            out/DRAX.apk
+            out/DRAX.apks
+            out/DRAX.xapk
