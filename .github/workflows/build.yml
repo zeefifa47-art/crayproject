@@ -26,6 +26,15 @@ jobs:
           mkdir -p proj
           unzip -q -o DRAX-project.zip -d proj
 
+      - name: Kompilasi komponen native (arm64)
+        run: |
+          NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-${ANDROID_NDK_LATEST_HOME:-}}}"
+          if [ -z "$NDK" ]; then NDK="$ANDROID_SDK_ROOT/ndk/$(ls "$ANDROID_SDK_ROOT/ndk" | sort -V | tail -1)"; fi
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          mkdir -p proj/app/src/main/assets
+          "$CC" -O2 -Wall -s -o proj/app/src/main/assets/draxsensid proj/native/draxsensid.c
+          ls -la proj/app/src/main/assets
+
       - name: Restore keystore
         uses: actions/cache@v4
         with:
@@ -98,3 +107,4 @@ jobs:
             out/DRAX.apk
             out/DRAX.apks
             out/DRAX.xapk
+            
