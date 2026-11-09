@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       KS_PASS: ${{ secrets.KS_PASS || 'cray-hazi-2026' }}
       KS_ALIAS: cray
@@ -20,6 +20,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
+
+      - name: Siapkan Android SDK
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" || true
+          sudo chown -R "$USER" "$ANDROID_HOME" || true
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            yes | "$SDKM" --licenses > /dev/null || true
+            "$SDKM" "platforms;android-35" "build-tools;35.0.0" > /dev/null || true
+          fi
 
       - name: Ekstrak zip
         run: |
@@ -61,23 +73,35 @@ jobs:
           pip install -q cryptography --break-system-packages || pip install -q cryptography
           keytool -exportcert -keystore cray.jks -alias cray -storepass "$KS_PASS" -file cert.der
           python3 proj/tools/bind_qr.py cert.der proj/secret/qris.jpg proj/app/src/main/assets/q.bin
-          ls -la proj/app/src/main/assets
 
-      - name: Build APK dan AAB
+      - name: Build APK
         working-directory: proj
         env:
           KS_FILE: ${{ github.workspace }}/cray.jks
         run: |
           set +e
-          gradle :app:assembleRelease :app:bundleRelease --no-daemon --stacktrace --warning-mode none 2>&1 | tee ../build.log
+          gradle :app:assembleRelease --no-daemon --stacktrace --warning-mode none 2>&1 | tee ../build.log
           code=${PIPESTATUS[0]}
-          grep -E "error:|e: |What went wrong|Execution failed|AAPT|Caused by" -A1 ../build.log | head -9 | while IFS= read -r l; do echo "::error::$l"; done
+          grep -E "error:|e: |What went wrong|Execution failed|AAPT|Caused by|SDK location|Failed to find" -A1 ../build.log | head -9 | while IFS= read -r l; do echo "::error::$l"; done
           exit $code
 
-      - name: Siapkan hasil
+      - name: Build AAB (opsional)
+        working-directory: proj
+        continue-on-error: true
+        env:
+          KS_FILE: ${{ github.workspace }}/cray.jks
+        run: gradle :app:bundleRelease --no-daemon --warning-mode none
+
+      - name: Kumpulkan APK
         run: |
           mkdir -p out
           cp proj/app/build/outputs/apk/release/DRAX-release.apk out/DRAX.apk
+          ls -la out
+
+      - name: Buat APKS dan XAPK
+        if: ${{ hashFiles('proj/app/build/outputs/bundle/release/*.aab') != '' }}
+        continue-on-error: true
+        run: |
           AAB=$(find proj/app/build/outputs/bundle/release -name '*.aab' | head -1)
           curl -sL -o bt.jar https://github.com/google/bundletool/releases/download/1.15.6/bundletool-all-1.15.6.jar
           java -jar bt.jar build-apks \
@@ -113,7 +137,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: DRAX
-          path: |
-            out/DRAX.apk
-            out/DRAX.apks
-            out/DRAX.xapk
+          path: out/*
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log
+          path: build.log
+          
