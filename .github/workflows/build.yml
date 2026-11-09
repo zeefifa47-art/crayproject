@@ -46,8 +46,9 @@ jobs:
       - name: Kompilasi komponen native (arm64)
         run: |
           NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-${ANDROID_NDK_LATEST_HOME:-}}}"
-          if [ -z "$NDK" ]; then NDK="$ANDROID_SDK_ROOT/ndk/$(ls "$ANDROID_SDK_ROOT/ndk" | sort -V | tail -1)"; fi
+          if [ -z "$NDK" ] && [ -d "$ANDROID_SDK_ROOT/ndk" ]; then NDK="$ANDROID_SDK_ROOT/ndk/$(ls "$ANDROID_SDK_ROOT/ndk" | sort -V | tail -1)"; fi
           CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          if [ ! -x "$CC" ]; then echo "::error::NDK clang tidak ditemukan di: $CC (NDK=$NDK)"; ls "$ANDROID_SDK_ROOT/ndk" 2>&1 || true; exit 1; fi
           mkdir -p proj/app/src/main/assets
           "$CC" -O2 -Wall -s -o proj/app/src/main/assets/draxsensid proj/native/draxsensid.c
           ls -la proj/app/src/main/assets
@@ -95,14 +96,21 @@ jobs:
       - name: Kumpulkan APK
         run: |
           mkdir -p out
-          cp proj/app/build/outputs/apk/release/DRAX-release.apk out/DRAX.apk
+          echo "--- isi folder output APK (untuk diagnosa) ---"
+          find proj/app/build/outputs/apk -maxdepth 3 -type f 2>&1 || true
+          APK=$(find proj/app/build/outputs/apk/release -maxdepth 1 -name '*.apk' ! -name '*unsigned*' | head -1)
+          if [ -z "$APK" ]; then APK=$(find proj/app/build/outputs/apk/release -maxdepth 1 -name '*.apk' | head -1); fi
+          if [ -z "$APK" ]; then echo "::error::Tidak ada file .apk di outputs/apk/release. Build gagal sebelum tahap ini."; exit 1; fi
+          echo "APK ditemukan: $APK"
+          cp "$APK" out/DRAX.apk
           ls -la out
 
       - name: Buat APKS dan XAPK
         if: ${{ hashFiles('proj/app/build/outputs/bundle/release/*.aab') != '' }}
         continue-on-error: true
         run: |
-          AAB=$(find proj/app/build/outputs/bundle/release -name '*.aab' | head -1)
+          AAB=$(find proj/app/build/outputs/bundle/release -maxdepth 1 -name '*.aab' | head -1)
+          if [ -z "$AAB" ]; then echo "Tidak ada .aab, lewati APKS/XAPK."; exit 0; fi
           curl -sL -o bt.jar https://github.com/google/bundletool/releases/download/1.15.6/bundletool-all-1.15.6.jar
           java -jar bt.jar build-apks \
             --bundle="$AAB" \
@@ -145,4 +153,3 @@ jobs:
         with:
           name: build-log
           path: build.log
-          
